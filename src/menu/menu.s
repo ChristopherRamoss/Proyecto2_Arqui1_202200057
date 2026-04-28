@@ -38,8 +38,8 @@
 .section .data
 
 .Stit:  .ascii "\n======================================\n"
-        .ascii "   MOTOR DE ALGEBRA LINEAL  ARM64\n"
-        .ascii "   Arq. de Computadores 1  USAC\n"
+        .ascii "   Proyecto2 202200057\n"
+        .ascii "   -----ARQUI1--------\n"
         .ascii "======================================\n"
 .Stit_l = . - .Stit
 
