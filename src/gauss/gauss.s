@@ -488,6 +488,7 @@ gauss_jordan:
 //
 // CALLEE-SAVED: x19-x27
 // ============================================================
+// REVISAR
 gauss_inverse:
     stp  x29, x30, [sp, #-96]!
     mov  x29, sp
