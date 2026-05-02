@@ -1,12 +1,16 @@
-// =============================================================================
 // src/menu/menu.s  — Menu interactivo principal y submenu de operaciones
 //
-// Funciones exportadas:
-//   menu_main  : bucle principal (1=CargarA, 2=CargarB, 3=Show, 4=Ops, ...)
-//   menu_ops   : submenu de operaciones (aritmetica + Gauss completo)
+// FLUJO GENERAL:
+//   _start -> matrix_init -> menu_main -> exit
 //
-// FLUJO: _start -> matrix_init -> menu_main -> exit
-// =============================================================================
+// RESPONSABILIDAD:
+//   - Interactuamos con el por la terminal
+//   - Llamar a funciones de matrices y gauss
+//
+// COMO USO LOS REGISTROS:
+//   - x0–x7  : argumentos / retorno (caller-saved)
+//   - x9–x15 : temporales (caller-saved)
+//   - x19–x28: callee-saved (DEBEN preservarse)
 
 .include "include/defines.inc"
 
@@ -94,53 +98,68 @@
 .section .text
 
 // ----------------------------------------------------------------
-// leer_opcion -> x0 = caracter leido desde stdin
-// Solo usa caller-saved: x0, x1, x2, x8
-// ----------------------------------------------------------------
+// leer_opcion
+// Lee hasta 4 bytes desde stdin (teclado) y devuelve el primer char.
+//
+// ENTRADA:
+//   - ninguna
+//
+// SALIDA:
+//   x0 = caracter ASCII leido
+//
+// REGISTROS USADOS:
+//   x0 = fd / retorno
+//   x1 = buffer
+//   x2 = tamaño
+//   x8 = syscall
+//
+// NOTA:
+//   Solo usa caller-saved → NO necesita guardar/restaurar stack
 leer_opcion:
-    adr  x1, .mrbuf
-    mov  x2, #4
-    mov  x0, #FD_STDIN
-    mov  x8, #SYS_READ
-    svc  #0
-    adr  x1, .mrbuf
-    ldrb w0, [x1]
-    ret
+    adr  x1, .mrbuf        // x1 = direccion donde guardamos info antes de saber que hacer con ella
+    mov  x2, #4            // x2 = maximo de bytes a leer
+    mov  x0, #FD_STDIN     // x0 = 0 entrada desde el teclado
+    mov  x8, #SYS_READ     // syscall read 
+    svc  #0                // read(0, la entrada del teclado, 4)
+    adr  x1, .mrbuf        // recargar direccion (por seguridad)
+    ldrb w0, [x1]          // w0 = buffer[0] (primer caracter)
+    ret                    // retorno con opcion en x0
 
 // ----------------------------------------------------------------
 // ops_show_result
 // ENTRADA: x0 = codigo de retorno de la ultima operacion
 // Muestra mat_R si ERR_OK, o mensaje de error en caso contrario.
+
+// FP =29 y LR =30 se preservan porque esta funcion se llama desde menu_ops, que es un submenu.
 // ----------------------------------------------------------------
 ops_show_result:
-    stp  x29, x30, [sp, #-16]!
+    stp  x29, x30, [sp, #-16]!   // guardar FP y LR
     mov  x29, sp
-    cmp  x0, #ERR_OK
+    cmp  x0, #ERR_OK            // se pregunta si la operacion fue exitosa (ERR_OK = 0)
     bne  .osr_err
-    adr  x0, .Sres;  mov x1, #.Sres_l;  bl io_print_str
-    adr  x0, mat_R;  bl io_print_matrix
+    adr  x0, .Sres;  mov x1, #.Sres_l;  bl io_print_str // EXITO mensaje "[Resultado en R]"
+    adr  x0, mat_R;  bl io_print_matrix                 // imprimir matriz resultado
     b    .osr_done
 .osr_err:
-    adr  x0, .Serr;  mov x1, #.Serr_l;  bl io_print_str
-.osr_done:
+    adr  x0, .Serr;  mov x1, #.Serr_l;  bl io_print_str // ERROR mensaje "[ERROR] Operacion fallida. Verifique matrices."
+.osr_done:                                              // Restaurar FP y LR antes de retornar
     ldp  x29, x30, [sp], #16
     ret
 
-// ================================================================
 // menu_main — Bucle principal
-// ================================================================
+//   x19 = opcion seleccionada (callee-saved)
 menu_main:
-    stp  x29, x30, [sp, #-32]!
+    stp  x29, x30, [sp, #-32]!   // stack frame 
     mov  x29, sp
-    stp  x19, x20, [sp, #16]
-
-    adr  x0, .Stit;  mov x1, #.Stit_l;  bl io_print_str
+    stp  x19, x20, [sp, #16]    // Guardar PAR x19-x20 en 16 bytes (callee-saved)
+    adr  x0, .Stit;  mov x1, #.Stit_l;  bl io_print_str // imprimir titulo del proyecto
 
 .mm_loop:
-    adr  x0, .Smenu; mov x1, #.Smenu_l; bl io_print_str
+    adr  x0, .Smenu; mov x1, #.Smenu_l; bl io_print_str // imprimir menu
     bl   leer_opcion
     mov  x19, x0                    // x19 = opcion (callee-saved)
 
+// comparamos el valor de x19 con cada opcion del menu, y saltamos a la etiqueta correspondiente :)
     cmp x19, #MENU_LOAD_A;    beq .mm_load_A
     cmp x19, #MENU_LOAD_B;    beq .mm_load_B
     cmp x19, #MENU_SHOW;      beq .mm_show
@@ -149,29 +168,32 @@ menu_main:
     cmp x19, #MENU_MOVE_R_B;  beq .mm_move_RB
     cmp x19, #MENU_FREE;      beq .mm_free
     cmp x19, #MENU_EXIT;      beq .mm_exit
-    adr x0, .Sinv; mov x1, #.Sinv_l; bl io_print_str
-    b .mm_loop
+    adr x0, .Sinv; mov x1, #.Sinv_l; bl io_print_str // por si no es ninguna
+    b .mm_loop                                      // volver a mostrar el menu
 
+
+
+// x0 = descriptor matriz   x1 = nombre     x2 = longitud
 .mm_load_A:
-    adr x0, .SldA; mov x1, #.SldA_l; bl io_print_str
-    adr x0, mat_A
-    adr x1, .SnA; mov x2, #.SnA_l
-    bl matrix_load
-    b .mm_loop
+    adr x0, .SldA; mov x1, #.SldA_l; bl io_print_str    // mensaje
+    adr x0, mat_A                                       // destino
+    adr x1, .SnA; mov x2, #.SnA_l                       // nombre "A"
+    bl matrix_load                                      // cargar datos
+    b .mm_loop                                          //Nos devolvemos al menu de antes
 
 .mm_load_B:
-    adr x0, .SldB; mov x1, #.SldB_l; bl io_print_str
+    adr x0, .SldB; mov x1, #.SldB_l; bl io_print_str    // lo mismo que A xd
     adr x0, mat_B
     adr x1, .SnB; mov x2, #.SnB_l
     bl matrix_load
     b .mm_loop
 
-.mm_show:
-    adr x0, .SmA; mov x1, #.SmA_l; bl io_print_str
+.mm_show:                                           // Mostrar A, B, R con sus respectivos mensajes
+    adr x0, .SmA; mov x1, #.SmA_l; bl io_print_str  // Aca va A
     adr x0, mat_A; bl io_print_matrix
-    adr x0, .SmB; mov x1, #.SmB_l; bl io_print_str
+    adr x0, .SmB; mov x1, #.SmB_l; bl io_print_str  // Aca va B
     adr x0, mat_B; bl io_print_matrix
-    adr x0, .SmR; mov x1, #.SmR_l; bl io_print_str
+    adr x0, .SmR; mov x1, #.SmR_l; bl io_print_str  // Aca va R
     adr x0, mat_R; bl io_print_matrix
     b .mm_loop
 
@@ -180,14 +202,14 @@ menu_main:
     b .mm_loop
 
 .mm_move_RA:
-    adr x0, mat_R; bl matrix_validate
+    adr x0, mat_R; bl matrix_validate                   // validar R
     cmp x0, #ERR_OK; bne .mm_R_empty
-    adr x0, mat_A; adr x1, mat_R; bl matrix_copy_desc
+    adr x0, mat_A; adr x1, mat_R; bl matrix_copy_desc   // destino de A hacia R
     adr x0, .SmRA; mov x1, #.SmRA_l; bl io_print_str
     b .mm_loop
 
 .mm_move_RB:
-    adr x0, mat_R; bl matrix_validate
+    adr x0, mat_R; bl matrix_validate               // Lo mismo que moveRA peroa b
     cmp x0, #ERR_OK; bne .mm_R_empty
     adr x0, mat_B; adr x1, mat_R; bl matrix_copy_desc
     adr x0, .SmRB; mov x1, #.SmRB_l; bl io_print_str
@@ -198,11 +220,11 @@ menu_main:
     b .mm_loop
 
 .mm_free:
-    bl matrix_free_all
-    adr x0, .Sfree; mov x1, #.Sfree_l; bl io_print_str
-    b .mm_loop
+    bl matrix_free_all                                  // liberar memoria de A, B, R
+    adr x0, .Sfree; mov x1, #.Sfree_l; bl io_print_str  
+    b .mm_loop                                      
 
-.mm_exit:
+.mm_exit:                                               // Nos despedimos y nos vamos
     adr x0, .Sbye; mov x1, #.Sbye_l; bl io_print_str
     bl matrix_free_all
     ldp x19, x20, [sp, #16]
@@ -215,9 +237,9 @@ menu_main:
 //          Gauss, Gauss-Jordan, inversa, determinante, division.
 // ================================================================
 menu_ops:
-    stp  x29, x30, [sp, #-32]!
-    mov  x29, sp
-    stp  x19, x20, [sp, #16]
+    stp  x29, x30, [sp, #-32]!      // stack frame para submenu (guardamos FP y LR)
+    mov  x29, sp                    
+    stp  x19, x20, [sp, #16]        // Guardar PAR x19-x20 en 16 bytes (callee-saved)
 
 .ops_loop:
     adr  x0, .Sops;  mov x1, #.Sops_l;  bl io_print_str
@@ -285,20 +307,18 @@ menu_ops:
     b .ops_loop
 
 .op_det:
-    // gauss_determinant: x0=valor_det (Q32.32), x1=ERR_OK o error
     bl gauss_determinant
-    // Para ops_show_result, el codigo de exito debe ir en x0.
-    // gauss_determinant pone el codigo en x1.
-    mov x0, x1                     // x0 = ERR_OK o codigo de error
     bl ops_show_result
     b .ops_loop
+    // CAMBIOS
+    // CAMBIOS
 
 .op_div:
     bl gauss_div                   // A / B = A * inv(B) -> R
     bl ops_show_result
     b .ops_loop
 
-.op_back:
+.op_back:                           // Restaurar estado de menu_main antes de retornar
     ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #32
     ret

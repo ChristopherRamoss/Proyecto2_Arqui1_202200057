@@ -1,6 +1,6 @@
 // =============================================================================
 // main.s
-// Punto de entrada del programa. El kernel de Linux llama a _start (NO a main).
+// Punto de entrada del programa. Linux llama a _start para iniciar 
 //
 // ESTRUCTURA DE UN PROGRAMA SIN LIBC:
 //   El linker busca el simbolo "_start" como punto de entrada.

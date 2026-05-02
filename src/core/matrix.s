@@ -1,4 +1,4 @@
-// =============================================================================
+//=================
 // src/core/matrix.s  —  Gestion de descriptores A, B y R
 //
 // Modelo de memoria:
@@ -13,7 +13,7 @@
 //   matrix_free_all  liberar A, B y R
 //   matrix_copy_desc copiar descriptor (transfiere propiedad del bloque)
 //   matrix_validate  verificar que el descriptor tiene datos
-// =============================================================================
+//=================
 
 .include "include/defines.inc"
 
@@ -43,7 +43,7 @@ mat_R:  .skip DESC_SIZE        // 64 bytes, descriptor del resultado R
 .section .data
 
 Srows:  .ascii "Ingrese filas: "
-Srows_l = . - Srows
+Srows_l = . - Srows                 // srows es la longitud de memoria donde empieza el texto
 
 Scols:  .ascii "Ingrese columnas: "
 Scols_l = . - Scols
@@ -71,28 +71,29 @@ Serr_mem_l  = . - Serr_mem
 // ─── codigo ────────────────────────────────────────────────────────────────
 .section .text
 
-// ============================================================
+//
 // matrix_init  —  pone STATUS_FREE en A, B y R
 // (.bss ya viene en cero, pero lo hacemos explicitamente)
-// ============================================================
+//
 matrix_init:
     adr  x0, mat_A;  str xzr, [x0, #DESC_STATUS]
     adr  x0, mat_B;  str xzr, [x0, #DESC_STATUS]
     adr  x0, mat_R;  str xzr, [x0, #DESC_STATUS]
     ret
 
-// ============================================================
+//
 // matrix_load
 // Pide filas, columnas y valores al usuario.
 // Llama matrix_resize para reservar memoria.
-//
+
 // IN:  x0 = puntero al descriptor (mat_A o mat_B)
 //      x1, x2 ignorados (no se usa el nombre de la matriz aqui)
 // OUT: x0 = ERR_OK o codigo de error
-//
-// CALLEE-SAVED: x19 (descriptor) x20 (filas) x21 (cols)
-//               x22 (puntero datos) x23 (i) x24 (j)
-// ============================================================
+
+// x21 para filas 
+// x22 para columnas
+// x23 para i (fila actual)
+// x24 para j (columna actual)
 matrix_load:
     stp  x29, x30, [sp, #-64]!
     mov  x29, sp
@@ -106,7 +107,7 @@ matrix_load:
     adr  x0, Srows;  mov x1, #Srows_l;  bl io_print_str
     bl   io_read_int
     cmp  x1, #ERR_OK;  bne .ml_err_inv
-    asr  x20, x0, #Q32_SHIFT  // x20 = filas (entero)
+    asr  x20, x0, #Q32_SHIFT  // x20 = filas (entero) ASR para convertir de Q32.32 a entero
     cmp  x20, #1;  blt .ml_err_dim
     cmp  x20, #MAX_ROWS; bgt .ml_err_dim
 
@@ -143,11 +144,11 @@ matrix_load:
 
     // --- REEMPLAZO SIMPLIFICADO ---
     // En lugar de imprimir a[i][j], imprimimos algo que no use io_print_int
-    adr  x0, Seq       // Usamos el "] = " que ya tienes definido o "-> "
+    adr  x0, Seq
     mov  x1, #Seq_l
     bl   io_print_str
 
-    // leer valor (Esto es lo que importa)
+    // leer valor
     bl   io_read_int
     cmp  x1, #ERR_OK;  bne .ml_err_inv
     // ------------------------------
@@ -161,32 +162,32 @@ matrix_load:
     add  x24, x24, #1
     b    .ml_col
 
-.ml_nextrow:
+.ml_nextrow:            // siguiente fila
     add  x23, x23, #1
     b    .ml_row
 
-.ml_done:
+.ml_done:               // Si todo esta bien 
     mov  x0, #ERR_OK;  b .ml_ret
 
-.ml_err_inv:
+.ml_err_inv:            // Si no se pudo leer bien 
     mov  x0, #ERR_INVALID;  b .ml_ret
 
-.ml_err_dim:
+.ml_err_dim:            // si las dimensiones no estan bien
     adr  x0, Serr_dim;  mov x1, #Serr_dim_l;  bl io_print_str
     mov  x0, #ERR_RANGE;  b .ml_ret
 
-.ml_err_mem:
+.ml_err_mem:        // Si no se pudo reservar memoria
     adr  x0, Serr_mem;  mov x1, #Serr_mem_l;  bl io_print_str
     mov  x0, #ERR_ALLOC
 
-.ml_ret:
+.ml_ret:            // RESTAURAMOS TODO
     ldp  x23, x24, [sp, #48]
     ldp  x21, x22, [sp, #32]
     ldp  x19, x20, [sp, #16]
     ldp  x29, x30, [sp], #64
     ret
 
-// ============================================================
+//
 // matrix_resize
 // Si el descriptor tenia datos, los libera con munmap.
 // Luego reserva un nuevo bloque con mmap y actualiza el descriptor.
@@ -200,7 +201,7 @@ matrix_load:
 //   Si falla, el retorno en x0 tiene el bit 63 en 1 (valor negativo).
 //
 // CALLEE-SAVED: x19 (desc) x20 (filas) x21 (cols) x22 (elems) x23 (bytes)
-// ============================================================
+//
 matrix_resize:
     stp  x29, x30, [sp, #-64]!
     mov  x29, sp
@@ -270,10 +271,10 @@ matrix_resize:
     ldp  x29, x30, [sp], #64
     ret
 
-// ============================================================
+//
 // matrix_free  —  munmap + limpiar descriptor
 // IN: x0 = descriptor
-// ============================================================
+//
 matrix_free:
     stp  x29, x30, [sp, #-32]!
     mov  x29, sp
@@ -304,9 +305,7 @@ matrix_free:
     ldp  x29, x30, [sp], #32
     ret
 
-// ============================================================
 // matrix_free_all  —  libera A, B y R
-// ============================================================
 matrix_free_all:
     stp  x29, x30, [sp, #-16]!
     mov  x29, sp
@@ -316,7 +315,6 @@ matrix_free_all:
     ldp  x29, x30, [sp], #16
     ret
 
-// ============================================================
 // matrix_copy_desc
 // Copia el descriptor de SRC a DST y transfiere la propiedad
 // del bloque de datos (SRC queda como FREE).
@@ -324,7 +322,6 @@ matrix_free_all:
 // Si DST ya tenia datos, los libera primero con munmap.
 //
 // IN:  x0 = DST   x1 = SRC
-// ============================================================
 matrix_copy_desc:
     stp  x29, x30, [sp, #-48]!
     mov  x29, sp
@@ -366,13 +363,13 @@ matrix_copy_desc:
     ldp  x29, x30, [sp], #48
     ret
 
-// ============================================================
+//
 // matrix_validate
 // IN:  x0 = descriptor
 // OUT: x0 = ERR_OK si valido y activo
 //          ERR_INVALID si puntero nulo
 //          ERR_EMPTY si STATUS != USED
-// ============================================================
+//
 matrix_validate:
     cbz  x0, .mv_null
     ldr  x1, [x0, #DESC_STATUS]

@@ -55,41 +55,39 @@ Ea_dm_l = . - Ea_dm
 // CALLEE-SAVED: x19(n) x20(datos_R) x21(k) x22(ONE_Q32)
 // ============================================================
 arith_identity:
-    stp  x29, x30, [sp, #-48]!
-    mov  x29, sp
-    stp  x19, x20, [sp, #16]
-    stp  x21, x22, [sp, #32]
+    stp  x29, x30, [sp, #-48]!      // guardamos FP y LR
+    mov  x29, sp                    // establecer nuevo frame pointer
+    stp  x19, x20, [sp, #16]        // Guardar PAR x19-x20 en 16 bytes
+    stp  x21, x22, [sp, #32]        // Guardar PAR x21-x22 en 16 bytes 
 
     // validar A
     adr  x0, mat_A
-    bl   matrix_validate
-    cmp  x0, #ERR_OK;  bne .aid_empty
+    bl   matrix_validate                 // las dimensiones deben ser validas
+    cmp  x0, #ERR_OK;  bne .aid_empty   // Si a da error por falta de datos
 
     // verificar cuadrada: ROWS == COLS
     adr  x0, mat_A
     ldr  x19, [x0, #DESC_ROWS]    // x19 = n
     ldr  x1,  [x0, #DESC_COLS]
     cmp  x19, x1;  bne .aid_nosq
-
     // reservar R de n×n (mmap pone todo en cero automaticamente)
     adr  x0, mat_R
     mov  x1, x19
     mov  x2, x19
     bl   matrix_resize
     cmp  x0, #ERR_OK;  bne .aid_ret
-
     // obtener puntero a datos de R
     adr  x0, mat_R
     ldr  x20, [x0, #DESC_DATA]    // x20 = datos de R
-
     // preparar 1.0 en Q32.32: valor = 1 << 32
     mov  x22, #1
     lsl  x22, x22, #Q32_SHIFT     // x22 = 0x0000000100000000
-
     // escribir 1.0 en cada posicion diagonal R[k][k]
     mov  x21, #0                   // k = 0
-.aid_loop:
-    cmp  x21, x19;  bge .aid_ok   // k >= n -> terminar
+
+
+.aid_loop:                          // comparar k con n para terminar el bucle
+    cmp  x21, x19;  bge .aid_ok     // k >= n -> terminar
 
     // offset = k*(n+1)*8
     // Calculo: idx = k*n + k = k*(n+1)
@@ -97,22 +95,21 @@ arith_identity:
     mul  x0, x21, x0               // x0 = k*(n+1)
     lsl  x0, x0, #3                // x0 = k*(n+1)*8  (offset en bytes)
     str  x22, [x20, x0]            // R[k][k] = 1.0 en Q32.32
-
     add  x21, x21, #1
     b    .aid_loop
 
-.aid_ok:
+.aid_ok:                            // identidad generada exitosamente
     mov  x0, #ERR_OK;  b .aid_ret
 
-.aid_empty:
+.aid_empty:                         // Si a no tiene datos no podemos generar nada
     adr  x0, Ea_em;  mov x1, #Ea_em_l;  bl io_print_str
     mov  x0, #ERR_EMPTY;  b .aid_ret
 
-.aid_nosq:
+.aid_nosq:                          // Si a no es CUADRADA tampoco
     adr  x0, Ea_sq;  mov x1, #Ea_sq_l;  bl io_print_str
     mov  x0, #ERR_RANGE
 
-.aid_ret:
+.aid_ret:                           // RETORNAR
     ldp  x21, x22, [sp, #32]
     ldp  x19, x20, [sp, #16]
     ldp  x29, x30, [sp], #48
@@ -128,22 +125,21 @@ arith_identity:
 // CALLEE-SAVED: x19(dA) x20(m) x21(n) x22(dR) x23(i) x24(j) x25(off)
 // ============================================================
 arith_transpose:
-    stp  x29, x30, [sp, #-80]!
-    mov  x29, sp
-    stp  x19, x20, [sp, #16]
+    stp  x29, x30, [sp, #-80]!  // guardar FP y LR
+    mov  x29, sp                // Nuevo FP
+    stp  x19, x20, [sp, #16]    // GUARDAMOS EL PAR
     stp  x21, x22, [sp, #32]
     stp  x23, x24, [sp, #48]
-    stp  x25, xzr, [sp, #64]
+    stp  x25, xzr, [sp, #64]    
 
-    adr  x0, mat_A
+    adr  x0, mat_A              // validamos a
     bl   matrix_validate
     cmp  x0, #ERR_OK;  bne .atr_empty
 
-    adr  x0, mat_A
+    adr  x0, mat_A                // Vamos a leer las dimensiones y datos de A
     ldr  x20, [x0, #DESC_ROWS]    // m
     ldr  x21, [x0, #DESC_COLS]    // n
     ldr  x19, [x0, #DESC_DATA]    // datos de A
-
     // R es n×m (intercambiamos filas y columnas)
     adr  x0, mat_R
     mov  x1, x21                   // filas de R = n
@@ -153,12 +149,11 @@ arith_transpose:
 
     adr  x0, mat_R
     ldr  x22, [x0, #DESC_DATA]    // datos de R
-
     mov  x23, #0                   // i = 0
-.atr_i:
+.atr_i:                             // bucle externo sobre filas de A
     cmp  x23, x20;  bge .atr_ok
     mov  x24, #0                   // j = 0
-.atr_j:
+.atr_j:                             // bucle interno sobre columnas de A
     cmp  x24, x21;  bge .atr_ni
 
     // leer A[i][j]: offset = (i*n + j)*8
@@ -174,16 +169,16 @@ arith_transpose:
     str  x0, [x22, x25]
 
     add  x24, x24, #1;  b .atr_j
-.atr_ni:
+.atr_ni:                            // siguiente fila de A
     add  x23, x23, #1;  b .atr_i
 
-.atr_ok:
+.atr_ok:                            // Si se genero bien la transp 
     mov  x0, #ERR_OK;  b .atr_ret
-.atr_empty:
+.atr_empty:                         // Si no hay datos y no podemos generar nada
     adr  x0, Ea_em;  mov x1, #Ea_em_l;  bl io_print_str
     mov  x0, #ERR_EMPTY
-.atr_ret:
-    ldp  x25, xzr, [sp, #64]
+.atr_ret:                           // RETORNAMOS TODO 
+    ldp  x25, xzr, [sp, #64]    
     ldp  x23, x24, [sp, #48]
     ldp  x21, x22, [sp, #32]
     ldp  x19, x20, [sp, #16]
@@ -218,16 +213,16 @@ arith_sub:
 
     // validar A y B
     adr  x0, mat_A
-    bl   matrix_validate
+    bl   matrix_validate            // validamos que A tiene datos y dimensiones validas
     cmp  x0, #ERR_OK;  bne .as_empty
 
     adr  x0, mat_B
-    bl   matrix_validate
+    bl   matrix_validate            // igual que B
     cmp  x0, #ERR_OK;  bne .as_empty
 
     // leer dimensiones y datos de A
     adr  x0, mat_A
-    ldr  x24, [x0, #DESC_ROWS]    // filas A
+    ldr  x24, [x0, #DESC_ROWS]    // Descriptores: salto para el bucle (filas de A)
     ldr  x21, [x0, #DESC_COLS]    // cols A
     ldr  x22, [x0, #DESC_ELEMS]   // ELEMS A
     ldr  x19, [x0, #DESC_DATA]    // datos A
@@ -235,18 +230,17 @@ arith_sub:
     // verificar B tiene mismas dimensiones
     adr  x0, mat_B
     ldr  x1, [x0, #DESC_ROWS]
-    cmp  x1, x24;  bne .as_dim
-    ldr  x1, [x0, #DESC_COLS]
-    cmp  x1, x21;  bne .as_dim
+    cmp  x1, x24;  bne .as_dim  // filas de B no coinciden con A
+    ldr  x1, [x0, #DESC_COLS]   // cols de B no coinciden con A
+    cmp  x1, x21;  bne .as_dim  
     ldr  x20, [x0, #DESC_DATA]    // datos B
 
     // reservar R con mismas dimensiones que A
     adr  x0, mat_R
     mov  x1, x24                   // filas
     mov  x2, x21                   // cols
-    bl   matrix_resize
+    bl   matrix_resize              // reservar R con mismas dimensiones que A
     cmp  x0, #ERR_OK;  bne .as_ret
-
     adr  x0, mat_R
     ldr  x23, [x0, #DESC_DATA]    // datos R  (x23 = dR)
 
@@ -311,7 +305,7 @@ arith_sub:
 // CALLEE-SAVED: x19-x28
 // ============================================================
 arith_mul:
-    stp  x29, x30, [sp, #-96]!
+    stp  x29, x30, [sp, #-96]!      // el 96 es por los 10 registros callee-saved (x19-x28)
     mov  x29, sp
     stp  x19, x20, [sp, #16]
     stp  x21, x22, [sp, #32]
@@ -319,8 +313,8 @@ arith_mul:
     stp  x25, x26, [sp, #64]
     stp  x27, x28, [sp, #80]
 
-    adr  x0, mat_A
-    bl   matrix_validate
+    adr  x0, mat_A                     
+    bl   matrix_validate                // validar matriz
     cmp  x0, #ERR_OK;  bne .am_empty
 
     adr  x0, mat_B
@@ -334,6 +328,7 @@ arith_mul:
     ldr  x19, [x0, #DESC_DATA]    // datos A
 
     // dimensiones B: n×p
+    // los DESC sirven para validar compatibilidad de dimensiones y para calcular offsets
     adr  x0, mat_B
     ldr  x23, [x0, #DESC_ROWS]    // debe ser == n
     ldr  x24, [x0, #DESC_COLS]    // p
@@ -353,7 +348,7 @@ arith_mul:
     ldr  x25, [x0, #DESC_DATA]    // datos R
 
     mov  x26, #0                   // i = 0
-.am_i:
+.am_i:                          // bucle externo sobre filas de A
     cmp  x26, x20;  bge .am_ok
     mov  x27, #0                   // j = 0
 .am_j:

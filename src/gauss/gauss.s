@@ -50,6 +50,7 @@
     .align 3
 .Gtemp:  .skip DESC_SIZE
 .Gaug:   .skip DESC_SIZE
+.GinvB:  .skip DESC_SIZE
 
 // ─── mensajes ─────────────────────────────────────────────────────────────
 .section .data
@@ -285,73 +286,74 @@ gauss_eliminate:
 // CALLEE-SAVED: x19(signo) x20(datos_R) x21(n) x22(acum_entero)
 // ============================================================
 gauss_determinant:
-    stp  x29, x30, [sp, #-48]!
-    mov  x29, sp
-    stp  x19, x20, [sp, #16]
-    stp  x21, x22, [sp, #32]
+    stp x29, x30, [sp, -48]!
+    mov x29, sp
+    stp x19, x20, [sp, 16]
+    stp x21, x22, [sp, 32]
 
-    bl   gauss_eliminate
-    cmp  x0, #ERR_OK;  bne .gdet_err
-    mov  x19, x1                   // x19 = signo (+1 o -1)
+    // 1. Obtener triangular superior
+    bl gauss_eliminate
+    cmp x0, #ERR_OK
+    bne .det_error
 
-    // leer la triangular de mat_R
-    adr  x0, mat_R
-    ldr  x21, [x0, #DESC_ROWS]    // n
-    ldr  x20, [x0, #DESC_DATA]    // datos
+    mov x19, x1 // signo
 
-    // ── FIX: producto de diagonales como ENTEROS (no Q32.32) ──
-    // Los valores de Bareiss en Q32.32 son enteros escalados por 2^32.
-    // Extraer parte entera de cada uno (ASR #32) y multiplicar normalmente.
-    mov  x22, #1                   // acumulador ENTERO (no Q32.32)
-    mov  x9, #0                    // k = 0
+    adr x0, mat_R
+    ldr x20, [x0, #DESC_ROWS]
+    ldr x21, [x0, #DESC_DATA]
 
-.gdet_prod:
-    cmp  x9, x21;  bge .gdet_sign
+    mov x22, #1      // acumulador entero
+    mov x9, #0
 
-    // offset de M[k][k]
-    mul  x10, x9, x21
-    add  x10, x10, x9
-    lsl  x10, x10, #3
-    ldr  x11, [x20, x10]          // M[k][k] en Q32.32
-    asr  x11, x11, #Q32_SHIFT     // x11 = parte entera de M[k][k]
+.det_loop:
+    cmp x9, x20
+    bge .det_sign
 
-    // multiplicar acumulador * x11 (ambos son enteros simples)
-    mul  x22, x22, x11
+    mul x10, x9, x20
+    add x10, x10, x9
+    lsl x10, x10, #3
 
-    add  x9, x9, #1;  b .gdet_prod
+    ldr x11, [x21, x10]
+    asr x11, x11, #32   // entero
 
-.gdet_sign:
-    // aplicar signo de las transposiciones
-    cmp  x19, #0;  bge .gdet_store
-    neg  x22, x22                  // negar si signo negativo
+    mul x22, x22, x11
 
-.gdet_store:
-    // convertir resultado entero a Q32.32
-    lsl  x22, x22, #Q32_SHIFT     // x22 = det en Q32.32
+    add x9, x9, #1
+    b .det_loop
 
-    // guardar en mat_R como matriz 1x1
-    adr  x0, mat_R
-    mov  x1, #1
-    mov  x2, #1
-    bl   matrix_resize             // libera triangular, reserva 1x1
-    cmp  x0, #ERR_OK;  bne .gdet_err2
+.det_sign:
+    cmp x19, #0
+    bge .det_store
+    neg x22, x22
 
-    adr  x0, mat_R
-    ldr  x0, [x0, #DESC_DATA]
-    str  x22, [x0]                 // mat_R[0][0] = det Q32.32
+.det_store:
+    lsl x22, x22, #32   // Q32.32
 
-    mov  x0, #ERR_OK;  b .gdet_ret
+    adr x0, mat_R
+    bl matrix_free 
 
-.gdet_err2:
-    mov  x0, #ERR_ALLOC;  b .gdet_ret
-.gdet_err:
-    // gauss_eliminate ya imprimio el error; retornar su codigo
-.gdet_ret:
-    ldp  x21, x22, [sp, #32]
-    ldp  x19, x20, [sp, #16]
-    ldp  x29, x30, [sp], #48
+    adr x0, mat_R
+    mov x1, #1
+    mov x2, #1
+    bl matrix_resize
+    cmp x0, #ERR_OK
+    bne .det_error
+
+    adr x0, mat_R
+    ldr x0, [x0, #DESC_DATA]
+    str x22, [x0]
+
+    mov x0, #ERR_OK
+    b .det_ret
+
+.det_error:
+    // error propagado
+
+.det_ret:
+    ldp x21, x22, [sp, 32]
+    ldp x19, x20, [sp, 16]
+    ldp x29, x30, [sp], 48
     ret
-
 // ============================================================
 // gauss_jordan — forma reducida por filas de A en R (RREF)
 //
@@ -692,67 +694,98 @@ gauss_inverse:
 // CALLEE-SAVED: x19-x23
 // ============================================================
 gauss_div:
-    stp  x29, x30, [sp, #-64]!
-    mov  x29, sp
-    stp  x19, x20, [sp, #16]
-    stp  x21, x22, [sp, #32]
-    stp  x23, xzr, [sp, #48]
+    stp x29, x30, [sp, -64]!
+    mov x29, sp
+    stp x19, x20, [sp, 16]
+    stp x21, x22, [sp, 32]
+    stp x23, xzr, [sp, 48]
 
-    adr  x0, mat_A;  bl matrix_validate
-    cmp  x0, #ERR_OK;  bne .gdiv_empty
-    adr  x0, mat_B;  bl matrix_validate
-    cmp  x0, #ERR_OK;  bne .gdiv_empty
+    // validar A
+    adr x0, mat_A
+    bl matrix_validate
+    cmp x0, #ERR_OK
+    bne .div_error
 
-    // copiar descriptor de A a .Gtemp
-    adr  x19, mat_A
-    adr  x20, .Gtemp
-    ldp  x21, x22, [x19, #0];   stp x21, x22, [x20, #0]
-    ldp  x21, x22, [x19, #16];  stp x21, x22, [x20, #16]
-    ldp  x21, x22, [x19, #32];  stp x21, x22, [x20, #32]
-    ldp  x21, x22, [x19, #48];  stp x21, x22, [x20, #48]
+    // validar B
+    adr x0, mat_B
+    bl matrix_validate
+    cmp x0, #ERR_OK
+    bne .div_error
 
-    // poner descriptor de B en mat_A
-    adr  x20, mat_B
-    ldp  x21, x22, [x20, #0];   stp x21, x22, [x19, #0]
-    ldp  x21, x22, [x20, #16];  stp x21, x22, [x19, #16]
-    ldp  x21, x22, [x20, #32];  stp x21, x22, [x19, #32]
-    ldp  x21, x22, [x20, #48];  stp x21, x22, [x19, #48]
+    // --------------------------------------------------------
+    // 1. Guardar A en Gtemp
+    // --------------------------------------------------------
+    adr x19, mat_A
+    adr x20, .Gtemp
 
-    // calcular inv(B) -> mat_R  (mat_A=B temporalmente)
-    bl   gauss_inverse
-    mov  x23, x0                  // x23 = codigo de error
+    ldp x21, x22, [x19, 0];  stp x21, x22, [x20, 0]
+    ldp x21, x22, [x19, 16]; stp x21, x22, [x20, 16]
+    ldp x21, x22, [x19, 32]; stp x21, x22, [x20, 32]
+    ldp x21, x22, [x19, 48]; stp x21, x22, [x20, 48]
 
-    // restaurar mat_A desde .Gtemp
-    adr  x19, mat_A
-    adr  x20, .Gtemp
-    ldp  x21, x22, [x20, #0];   stp x21, x22, [x19, #0]
-    ldp  x21, x22, [x20, #16];  stp x21, x22, [x19, #16]
-    ldp  x21, x22, [x20, #32];  stp x21, x22, [x19, #32]
-    ldp  x21, x22, [x20, #48];  stp x21, x22, [x19, #48]
-    str  xzr, [x20, #DESC_STATUS]  // limpiar .Gtemp
+    // --------------------------------------------------------
+    // 2. Poner B en A
+    // --------------------------------------------------------
+    adr x20, mat_B
 
-    cmp  x23, #ERR_OK;  bne .gdiv_ret
+    ldp x21, x22, [x20, 0];  stp x21, x22, [x19, 0]
+    ldp x21, x22, [x20, 16]; stp x21, x22, [x19, 16]
+    ldp x21, x22, [x20, 32]; stp x21, x22, [x19, 32]
+    ldp x21, x22, [x20, 48]; stp x21, x22, [x19, 48]
 
-    // mover mat_R (=inv(B)) a mat_B
-    adr  x0, mat_B;  bl matrix_free
-    adr  x0, mat_B
-    adr  x1, mat_R
-    bl   matrix_copy_desc
+    // --------------------------------------------------------
+    // 3. inv(B)
+    // --------------------------------------------------------
+    bl gauss_inverse
+    cmp x0, #ERR_OK
+    bne .div_restore_A
 
-    // multiplicar A * mat_B(=inv(B)) -> mat_R
-    bl   arith_mul
-    mov  x23, x0
+    // guardar inv(B)
+    adr x0, .GinvB
+    adr x1, mat_R
+    bl matrix_copy_desc
 
-    b    .gdiv_ret
+.div_restore_A:
+    // --------------------------------------------------------
+    // 4. restaurar A
+    // --------------------------------------------------------
+    adr x19, mat_A
+    adr x20, .Gtemp
 
-.gdiv_empty:
-    adr  x0, Gg_em;  mov x1, #Gg_em_l;  bl io_print_str
-    mov  x23, #ERR_EMPTY
+    ldp x21, x22, [x20, 0];  stp x21, x22, [x19, 0]
+    ldp x21, x22, [x20, 16]; stp x21, x22, [x19, 16]
+    ldp x21, x22, [x20, 32]; stp x21, x22, [x19, 32]
+    ldp x21, x22, [x20, 48]; stp x21, x22, [x19, 48]
 
-.gdiv_ret:
-    mov  x0, x23
-    ldp  x23, xzr, [sp, #48]
-    ldp  x21, x22, [sp, #32]
-    ldp  x19, x20, [sp, #16]
-    ldp  x29, x30, [sp], #64
+    cmp x0, #ERR_OK
+    bne .div_error
+
+    // --------------------------------------------------------
+    // 5. B = inv(B)
+    // --------------------------------------------------------
+    adr x0, mat_B
+    bl matrix_free
+
+    adr x0, mat_B
+    adr x1, .GinvB
+    bl matrix_copy_desc
+
+    // --------------------------------------------------------
+    // 6. R = A * inv(B)
+    // --------------------------------------------------------
+    bl arith_mul
+
+    b .div_ret
+
+.div_error:
+    mov x0, #ERR_EMPTY
+
+.div_ret:
+    ldp x23, xzr, [sp, 48]
+    ldp x21, x22, [sp, 32]
+    ldp x19, x20, [sp, 16]
+    ldp x29, x30, [sp], 64
     ret
+
+    // CAMBIOS
+    // CAMBIOS
